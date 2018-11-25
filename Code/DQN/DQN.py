@@ -1,24 +1,13 @@
 # -*- coding: utf-8 -*-
 
-"""
-This part of code is the DQN brain, which is a brain of the agent.
-All decisions are made in here.
-Using Tensorflow to build the neural network.
-View more on my tutorial page: https://morvanzhou.github.io/tutorials/
-Using:
-Tensorflow: 1.0
-gym: 0.7.3
-"""
 
 import numpy as np
-import pandas as pd
 import tensorflow as tf
 
 np.random.seed(1)
 tf.set_random_seed(1)
 
 
-# Deep Q Network off-policy
 class DeepQNetwork:
     def __init__(
             self,
@@ -47,10 +36,11 @@ class DeepQNetwork:
         # total learning step
         self.learn_step_counter = 0
 
-        # initialize zero memory [s, a, r, s_]
+        # 用0初始化记忆池 [s, a, r, s_] s和s_是2维，a、r是一维
+        # memory (memory_size,6)=(500,6)
         self.memory = np.zeros((self.memory_size, n_features * 2 + 2))
 
-        # consist of [target_net, evaluate_net]
+        # 更新target_net参数
         self._build_net()
         t_params = tf.get_collection('target_net_params')
         e_params = tf.get_collection('eval_net_params')
@@ -68,21 +58,21 @@ class DeepQNetwork:
 
     def _build_net(self):
         # ------------------ build evaluate_net ------------------
-        self.s = tf.placeholder(tf.float32, [None, self.n_features], name='s')  # input
-        self.q_target = tf.placeholder(tf.float32, [None, self.n_actions], name='Q_target')  # for calculating loss
+        self.s = tf.placeholder(tf.float32, [None, self.n_features], name='s')  # input : state n*2向量，代表xy坐标
+        self.q_target = tf.placeholder(tf.float32, [None, self.n_actions], name='Q_target')  # 用于计算loss，n*4向量，行动的四种选择
         with tf.variable_scope('eval_net'):
-            # c_names(collections_names) are the collections to store variables
+            # c_names(collections_names) 保存着eval_net中所有的参数，更新target_net参数时会用到
             c_names, n_l1, w_initializer, b_initializer = \
                 ['eval_net_params', tf.GraphKeys.GLOBAL_VARIABLES], 10, \
                 tf.random_normal_initializer(0., 0.3), tf.constant_initializer(0.1)  # config of layers
 
-            # first layer. collections is used later when assign to target net
+            # 第一层 : (n,2)->(n,10)
             with tf.variable_scope('l1'):
                 w1 = tf.get_variable('w1', [self.n_features, n_l1], initializer=w_initializer, collections=c_names)
                 b1 = tf.get_variable('b1', [1, n_l1], initializer=b_initializer, collections=c_names)
                 l1 = tf.nn.relu(tf.matmul(self.s, w1) + b1)
 
-            # second layer. collections is used later when assign to target net
+            # 第二层 : (n,10)->(n,4)
             with tf.variable_scope('l2'):
                 w2 = tf.get_variable('w2', [n_l1, self.n_actions], initializer=w_initializer, collections=c_names)
                 b2 = tf.get_variable('b2', [1, self.n_actions], initializer=b_initializer, collections=c_names)
@@ -94,30 +84,30 @@ class DeepQNetwork:
             self._train_op = tf.train.RMSPropOptimizer(self.lr).minimize(self.loss)
 
         # ------------------ build target_net ------------------
-        self.s_ = tf.placeholder(tf.float32, [None, self.n_features], name='s_')    # input
+        self.s_ = tf.placeholder(tf.float32, [None, self.n_features], name='s_')    # input : next_state (n,2)
         with tf.variable_scope('target_net'):
-            # c_names(collections_names) are the collections to store variables
             c_names = ['target_net_params', tf.GraphKeys.GLOBAL_VARIABLES]
 
-            # first layer. collections is used later when assign to target net
+            # 第一层 : (n,2)->(n,10)
             with tf.variable_scope('l1'):
                 w1 = tf.get_variable('w1', [self.n_features, n_l1], initializer=w_initializer, collections=c_names)
                 b1 = tf.get_variable('b1', [1, n_l1], initializer=b_initializer, collections=c_names)
                 l1 = tf.nn.relu(tf.matmul(self.s_, w1) + b1)
 
-            # second layer. collections is used later when assign to target net
+            # 第二层 : (n,10)->(n,4)
             with tf.variable_scope('l2'):
                 w2 = tf.get_variable('w2', [n_l1, self.n_actions], initializer=w_initializer, collections=c_names)
                 b2 = tf.get_variable('b2', [1, self.n_actions], initializer=b_initializer, collections=c_names)
                 self.q_next = tf.matmul(l1, w2) + b2
 
+    # 存储记忆
     def store_transition(self, s, a, r, s_):
         if not hasattr(self, 'memory_counter'):
             self.memory_counter = 0
 
         transition = np.hstack((s, [a, r], s_))
 
-        # replace the old memory with new memory
+        # 记忆池满了之后，新记忆替换掉旧的记忆
         index = self.memory_counter % self.memory_size
         self.memory[index, :] = transition
 
@@ -136,32 +126,36 @@ class DeepQNetwork:
         return action
 
     def learn(self):
-        # check to replace target parameters
+        # eval_net迭代学习300次之后，用eval_net的参数更新target_net
         if self.learn_step_counter % self.replace_target_iter == 0:
             self.sess.run(self.replace_target_op)
             print('\ntarget_params_replaced\n')
 
-        # sample batch memory from all memory
+        # 从memory(500,6)中随机抽取sample_index(32)个数据batch_memory(32,6)用于训练
+        # np.random.choice(self.memory_size, size=self.batch_size) 从0~memory_size随机抽取batch_size个数组成一个一维数组
         if self.memory_counter > self.memory_size:
             sample_index = np.random.choice(self.memory_size, size=self.batch_size)
         else:
             sample_index = np.random.choice(self.memory_counter, size=self.batch_size)
+        # 从memory中将sample_index里面元素对应的记忆取出，可以理解为sample_index里存储的是下标
         batch_memory = self.memory[sample_index, :]
 
+        # 使用模型求出q_eval和q_next
         q_next, q_eval = self.sess.run(
             [self.q_next, self.q_eval],
             feed_dict={
-                self.s_: batch_memory[:, -self.n_features:],  # fixed params
-                self.s: batch_memory[:, :self.n_features],  # newest params
+                self.s_: batch_memory[:, -self.n_features:],  # s_
+                self.s: batch_memory[:, :self.n_features],  # s
             })
 
-        # change q_target w.r.t q_eval's action
+        # 根据公式计算q_target
         q_target = q_eval.copy()
 
-        batch_index = np.arange(self.batch_size, dtype=np.int32)
-        eval_act_index = batch_memory[:, self.n_features].astype(int)
+        batch_index = np.arange(self.batch_size, dtype=np.int32)    # batch_index=[0,1,...,31]
+        eval_act_index = batch_memory[:, self.n_features].astype(int)   # 每个记忆选取的action
         reward = batch_memory[:, self.n_features + 1]
 
+        # 每个记忆具有4个action的q值，只更新所选择的那个action对应的q值
         q_target[batch_index, eval_act_index] = reward + self.gamma * np.max(q_next, axis=1)
 
         """

@@ -1,34 +1,36 @@
 # -*- coding: utf-8 -*-
 from maze_env import Maze
-from RL_brain import DeepQNetwork
+from DQN import DeepQNetwork
 # from DQN_modified import DeepQNetwork
 
 
 def run_maze():
     step = 0
+
     for episode in range(300):
-        # initial observation
-        observation = env.reset()
+        # 初始化状态
+        state = env.reset()
 
         while True:
             # fresh env
             env.render()
 
-            # RL choose action based on observation
-            action = RL.choose_action(observation)
+            # 根据当前状态s选取行动
+            action = RL.choose_action(state)
 
-            # RL take action and get next observation and reward
-            observation_, reward, done = env.step(action)
+            # 根据选取的行动更新状态，并计算reward和是否结束done
+            next_state, reward, done = env.step(action)
 
-            RL.store_transition(observation, action, reward, observation_)
+            # 记录记忆
+            RL.store_transition(state, action, reward, next_state)
 
+            # 200步之后，每5步学习一次
             if (step > 200) and (step % 5 == 0):
                 RL.learn()
 
-            # swap observation
-            observation = observation_
+            # swap state
+            next_state = state
 
-            # break while loop when end of this episode
             if done:
                 break
             step += 1
