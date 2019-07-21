@@ -8,11 +8,6 @@ import math
 
 
 
-
-
-
-
-
 '''
 Scaled Dot Product Attention
 
