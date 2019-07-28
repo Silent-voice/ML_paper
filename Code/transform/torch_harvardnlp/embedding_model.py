@@ -25,15 +25,20 @@ class PositionalEncoding(nn.Module):
         super(PositionalEncoding, self).__init__()
         self.dropout = nn.Dropout(p=dropout)
 
-        # Compute the positional encodings once in log space.
+        '''
+        pe.shape=(max_len, d_model)     初始全0
+        position.shape=(max_len,1)      值为绝对位置1,2,...
+        div_term.shape=(d_model/2)      一组很小的数
+        position * div_term = (max_len,d_model/2)
+        '''
         pe = torch.zeros(max_len, d_model)
         position = torch.arange(0., max_len).unsqueeze(1)
         div_term = torch.exp(torch.arange(0., d_model, 2) *
                              -(math.log(10000.0) / d_model))
-        pe[:, 0::2] = torch.sin(position * div_term)
-        pe[:, 1::2] = torch.cos(position * div_term)
+        pe[:, 0::2] = torch.sin(position * div_term)       # 0::2 表示下标0,2,4,8,...的值，0是起始位置，2是间隔
+        pe[:, 1::2] = torch.cos(position * div_term)       # 1::2 表示下标1,3,5,7,...的值，1是起始位置，2是间隔
         pe = pe.unsqueeze(0)
-        self.register_buffer('pe', pe)
+        self.register_buffer('pe', pe)  # 不优化
 
     def forward(self, x):
         x = x + Variable(self.pe[:, :x.size(1)],
