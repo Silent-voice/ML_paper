@@ -20,7 +20,7 @@ nn.Parameter类型变量会在optim.step时进行更新，nn.buffer则不会
 
 
 '''
-相对位置编码：(1,n) -> (n,m) -> (n,2m)
+相对位置编码：sin[=((len,1) * (m/2)) +  cos[=((len,1) * (m/2))-> (len,m)
 '''
 class PositionalEmbedding(nn.Module):
     def __init__(self, demb):
@@ -239,18 +239,21 @@ class RelPartialLearnableMultiHeadAttn(RelMultiHeadAttn):
 
         self.r_net = nn.Linear(self.d_model, self.n_head * self.d_head, bias=False)
 
+    # w : word embedding (seg_len, batch_size, embedding_size)      r : position embedding
     def forward(self, w, r, r_w_bias, r_r_bias, attn_mask=None, mems=None):
         qlen, rlen, bsz = w.size(0), r.size(0), w.size(1)
 
         if mems is not None:
+        	# cat = [mems, w]
             cat = torch.cat([mems, w], 0)
             if self.pre_lnorm:
                 w_heads = self.qkv_net(self.layer_norm(cat))
             else:
                 w_heads = self.qkv_net(cat)
             r_head_k = self.r_net(r)
-
+            # 最后一个维度上均分3份，qkv_net的输出维度是3*n_head*d_head
             w_head_q, w_head_k, w_head_v = torch.chunk(w_heads, 3, dim=-1)
+            # Q不需要使用上个segment的中间输出
             w_head_q = w_head_q[-qlen:]
         else:
             if self.pre_lnorm:
@@ -269,7 +272,9 @@ class RelPartialLearnableMultiHeadAttn(RelMultiHeadAttn):
 
         r_head_k = r_head_k.view(rlen, self.n_head, self.d_head)                # qlen x n_head x d_head
 
-        #### compute attention score
+
+        # 根据公式进行Attention score的计算
+        # w_head_q -> Q/E_X_i     w_head_k -> K/E_X_j   r_w_bias -> u  r_r_bias -> v    r_head_k -> R_i-j
         rw_head_q = w_head_q + r_w_bias                                         # qlen x bsz x n_head x d_head
         AC = torch.einsum('ibnd,jbnd->ijbn', (rw_head_q, w_head_k))             # qlen x klen x bsz x n_head
 
