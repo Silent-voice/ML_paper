@@ -44,7 +44,7 @@ class BiRNN(nn.Module):
         self.num_layers = num_layers
         # 双向RNN
         # (x1,...,xn) -> RNN1 -> (o11,...,01n)   (xn,...,x1) -> RNN2 -> (o21,...,02n)
-        # 输出：(o11,...,01n,o21,...,02n)
+        # 输出：(o11+n2n,...,o1n+o21)
         self.lstm = nn.LSTM(input_size, hidden_size, num_layers, batch_first=True, bidirectional=True)
         self.fc = nn.Linear(hidden_size * 2, num_classes)  # 2 for bidirection
 
