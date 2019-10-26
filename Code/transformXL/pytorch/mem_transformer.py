@@ -12,51 +12,31 @@ sys.path.append('utils')
 from proj_adaptive_softmax import ProjectedAdaptiveLogSoftmax
 from log_uniform_sampler import LogUniformSampler, sample_logits
 
-
-'''
-nn.Parameter类型变量会在optim.step时进行更新，nn.buffer则不会
-'''
-
-
-
-'''
-相对位置编码：sin[=((len,1) * (m/2)) +  cos[=((len,1) * (m/2))-> (len,m)
-'''
 class PositionalEmbedding(nn.Module):
     def __init__(self, demb):
         super(PositionalEmbedding, self).__init__()
 
         self.demb = demb
 
-        '''
-        torch.arange(start, end, step)=[start,start+step,...]
-        n ** [x_1,x_2,...] = [n**x_1, n**x_2] 次方
-        '''
         inv_freq = 1 / (10000 ** (torch.arange(0.0, demb, 2.0) / demb))
-        self.register_buffer('inv_freq', inv_freq)      # 将Parameter转换成buffer类型，使用self.inv_freq调用
+        self.register_buffer('inv_freq', inv_freq)
 
-    # pos_seq.shape=(1,n)
     def forward(self, pos_seq, bsz=None):
-        # torch.ger() 向量外积，[x_1,x_2,...] * [y_1,y_2,...] = [x_1*[y_1,y_2,...], x_2*[y_1,y_2,...],...]
-        # sinusoid_inp.shape=(n,m)
         sinusoid_inp = torch.ger(pos_seq, self.inv_freq)
-        # orch.cat() 融合两个矩阵  pos_emb.shape=(n,2m)
         pos_emb = torch.cat([sinusoid_inp.sin(), sinusoid_inp.cos()], dim=-1)
 
         if bsz is not None:
-            return pos_emb[:,None,:].expand(-1, bsz, -1)    # 维度扩展
+            return pos_emb[:,None,:].expand(-1, bsz, -1)
         else:
             return pos_emb[:,None,:]
 
-'''
-Feed Forward层
-'''
+
 class PositionwiseFF(nn.Module):
     def __init__(self, d_model, d_inner, dropout, pre_lnorm=False):
         super(PositionwiseFF, self).__init__()
 
-        self.d_model = d_model  # input size
-        self.d_inner = d_inner  # hide size
+        self.d_model = d_model
+        self.d_inner = d_inner
         self.dropout = dropout
 
         self.CoreNet = nn.Sequential(
@@ -65,23 +45,23 @@ class PositionwiseFF(nn.Module):
             nn.Linear(d_inner, d_model),
             nn.Dropout(dropout),
         )
-        # 归一化
+
         self.layer_norm = nn.LayerNorm(d_model)
 
         self.pre_lnorm = pre_lnorm
 
     def forward(self, inp):
         if self.pre_lnorm:
-            # layer normalization + positionwise feed-forward
+            ##### layer normalization + positionwise feed-forward
             core_out = self.CoreNet(self.layer_norm(inp))
 
-            # 残差连接
+            ##### residual connection
             output = core_out + inp
         else:
-            # positionwise feed-forward
+            ##### positionwise feed-forward
             core_out = self.CoreNet(inp)
 
-            # residual connection + layer normalization
+            ##### residual connection + layer normalization
             output = self.layer_norm(inp + core_out)
 
         return output
@@ -92,11 +72,10 @@ class MultiHeadAttn(nn.Module):
         super(MultiHeadAttn, self).__init__()
 
         self.n_head = n_head
-        self.d_model = d_model  # d_model = n_head * d_head
+        self.d_model = d_model
         self.d_head = d_head
         self.dropout = dropout
 
-        # 用于Q/K/V的全连接层
         self.q_net = nn.Linear(d_model, n_head * d_head, bias=False)
         self.kv_net = nn.Linear(d_model, 2 * n_head * d_head, bias=False)
 
@@ -123,12 +102,9 @@ class MultiHeadAttn(nn.Module):
             ##### layer normalization
             c = self.layer_norm(c)
 
-        # Q只需要segment的h
         head_q = self.q_net(h)
-        # K/V 需要使用上个segment的中间输出h参与  torch.chunk(input, chunks, dim) 从最后一个维度上切分成2个矩阵
         head_k, head_v = torch.chunk(self.kv_net(c), 2, -1)
 
-        #
         head_q = head_q.view(h.size(0), h.size(1), self.n_head, self.d_head)
         head_k = head_k.view(c.size(0), c.size(1), self.n_head, self.d_head)
         head_v = head_v.view(c.size(0), c.size(1), self.n_head, self.d_head)
@@ -239,21 +215,18 @@ class RelPartialLearnableMultiHeadAttn(RelMultiHeadAttn):
 
         self.r_net = nn.Linear(self.d_model, self.n_head * self.d_head, bias=False)
 
-    # w : word embedding (seg_len, batch_size, embedding_size)      r : position embedding
     def forward(self, w, r, r_w_bias, r_r_bias, attn_mask=None, mems=None):
         qlen, rlen, bsz = w.size(0), r.size(0), w.size(1)
 
         if mems is not None:
-        	# cat = [mems, w]
             cat = torch.cat([mems, w], 0)
             if self.pre_lnorm:
                 w_heads = self.qkv_net(self.layer_norm(cat))
             else:
                 w_heads = self.qkv_net(cat)
             r_head_k = self.r_net(r)
-            # 最后一个维度上均分3份，qkv_net的输出维度是3*n_head*d_head
+
             w_head_q, w_head_k, w_head_v = torch.chunk(w_heads, 3, dim=-1)
-            # Q不需要使用上个segment的中间输出
             w_head_q = w_head_q[-qlen:]
         else:
             if self.pre_lnorm:
@@ -272,9 +245,7 @@ class RelPartialLearnableMultiHeadAttn(RelMultiHeadAttn):
 
         r_head_k = r_head_k.view(rlen, self.n_head, self.d_head)                # qlen x n_head x d_head
 
-
-        # 根据公式进行Attention score的计算
-        # w_head_q -> Q/E_X_i     w_head_k -> K/E_X_j   r_w_bias -> u  r_r_bias -> v    r_head_k -> R_i-j
+        #### compute attention score
         rw_head_q = w_head_q + r_w_bias                                         # qlen x bsz x n_head x d_head
         AC = torch.einsum('ibnd,jbnd->ijbn', (rw_head_q, w_head_k))             # qlen x klen x bsz x n_head
 
